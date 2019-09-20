@@ -1,0 +1,345 @@
+---
+date: "2019-08-15"
+title: "Polling for real-time data"
+categories:
+  - "React"
+  - "Workshops"
+---
+
+** Building a simple Twitter clone in React **
+
+_hier nog klein beetje tekst?..._
+
+> TLDR; / Spoiler Alert:
+
+> Before writing this post I thought I would just explore the ```useEffect``` hook, 
+but along the way I encountered the ```useCallback``` too, which gave me (and 
+possibly you too) some nice insights! :)
+
+In my React workshop for beginners I learn the participants how to create a simple 
+Twitter clone from scratch. By the end of the workshop we have an app that displays 
+the user's timeline and a form to post new messages which appear on the timeline. 
+And because all users are following each other it appears on their timeline too.
+
+For posting new messages I use _optimistic updates_, which means after posting a new
+message it is added to state first, which causes a re-render resulting in the message
+being displayed in the app right away, followed by posting the message to the REST API 
+I built.
+
+Because that API call almost never fails the user experiences a very snappy app because
+you don't have to wait for the server to finish handling storing the message. And in 
+a rare case the API call fails the app will restore the timeline to its original state.
+
+So now you might wonder when and how is that timeline retrieved from the server? 
+This is done when opening the app and after refreshing the page.
+
+Some participants also added a GET call after posting the message from the server, 
+so other posts that were added by other users in the mean time would also appear on 
+the timeline.
+
+While this is a nice start, the next logical step would be to make the app 
+_realtime_, so that refreshing the timeline does not only depend on user actions. 
+
+However, as my workshops are during the evening, getting this far in building an 
+app that does all this was already quite a struggle for most participants.
+
+** !!! NEWS FLASH !!! **
+
+After giving some evening workshops me and my employer came up with the idea of expanding 
+my workshops into a full day training! 
+
+For me this is very exciting because I can take teaching (and learning, for that matter) 
+React to a next level.
+
+I really like doing this as I learn a lot from it, both as a person and to solidify what
+I learn about React. Having all day I can not only explain things in more detail but also 
+add some new subjects.
+
+And last but not least, participants have more time working on assignments and exploring
+React, because it's a hands-on DIY training.
+
+One of the new subjects might be making the app realtime. This blog post is about 
+finding a way how to do that in a *simple* way.
+
+The objective of my workshops is to learn React and not some very advanced and 
+time-consuming architectural solution. There are other courses to learn about that.
+
+** Polling to the rescue **
+
+The most simple solution I can come up with is polling each x seconds to the server and
+ask whether there are new posts.
+
+There are two ways of polling, the first is _short polling_, which means the client asks 
+for new posts, the server answers and the connection is closed. 
+
+And then there is _long polling_, which means the connection to the server is kept open 
+and the server answers as soon as there are new posts.
+
+Polling means the client takes the initiative to _pull_ data from the server. There are 
+also patterns where the server _pushes_ data to the client, such as WebSockets and 
+Server-Sent Events (SSE).
+
+If you are looking for a _real_ realtime solution the server push patterns are definitely 
+the way to go.
+
+But as I said, I am looking for a simple solution, so I choose _short polling_, which 
+makes the app _realtime-ish_, which is good enough for me considering the learning curve
+and effort.
+
+** Let's get started **
+
+We want to retrieve the timeline when the app is opened for the first time, i.e. when the 
+component is mounted. As a consequence the timeline will also be retrieved when the page 
+is refreshed.
+
+What a React component only does in essence is rendering UI and responding to user events, 
+which in turn could cause a new re-render because state might have changed. The fact that
+we want to do something that is not a user event means we are dealing with a side effect.
+
+And therefore we need the ```useEffect``` hook to fetch the data:
+
+```js
+useEffect(() => {
+  axios
+    .get("https://example.com/timeline")
+    .then(res => {
+      setTimeline(res.data);
+    })
+    .catch(error => {
+      console.log(error, error.request, error.response, error.config);
+    });
+}, []);
+```
+
+The first argument of the ```useEffect``` is an inline function that calls the 
+server and sets the received posts as state. The second is an empty array, which 
+means the effect is called on the first render only.
+
+Nice, so now retrieving the timeline when opening (or refreshing) the app works.
+
+** Add polling **
+
+Polling in our case means calling the server every x seconds. And the fact
+that our component needs to do something based on _time_ is also a _side effect_, 
+so we have to create another ```useEffect``` which also calls the REST API.
+
+Let's refactor the code that retrieves the timeline by putting it into a new function 
+called ```getTimeline``` so it becomes reusable:
+
+```js
+function getTimeline() {
+  axios
+    .get("https://example.com/timeline")
+    .then(res => {
+      setTimeline(res.data);
+    })
+    .catch(error => {
+      console.log(error, error.request, error.response, error.config);
+    });
+}
+```
+
+And call that in our existing ```useEffect```:
+
+```js
+useEffect(() => {
+  getTimeline();
+}, []);
+```
+
+Next, let's create a new ```useEffect``` for calling the REST API every x seconds. 
+
+This ```useEffect``` uses javascript's ```setInterval``` to call the ```getTimeline``` 
+function every 10 seconds. And because an interval needs to be cleaned up after using it
+we return a function to do just that. React will call that function when the component 
+unmounts.
+
+The second argument is an empty array (again) because we want to set up this 
+interval once, on the first render.
+
+```js
+useEffect(() => {
+  const interval = setInterval(() => {
+    getTimeline();      
+  }, 10000);
+  return () => clearInterval(interval);
+}, []);
+```
+
+And there you have it, a very simple realtime-ish app, very nice!
+
+** Versioning the data on the server **
+
+What our code does is fetching the entire timeline from the server every x seconds.
+And replace the entire timeline state with that new timeline data. But because our app 
+is not widely used yet this is a bit of waste of resources.
+
+Let's improve this on the server by leveraging a caching strategy the HTTP protocol 
+offers us:.
+
+The timeline resource for each user on the server will get a _version number_. Every time 
+a post is added to the timeline the version number is updated. Note that when a user posts 
+a new message also the timelines of the users that are following the posting user will get 
+a new version number.
+
+The client will request the current timeline and besides the timeline itself, the server 
+will provide the current version number for that timeline resource.
+
+The client will keep track of that version number. Every time the client asks for 
+the timeline it will provide that version number so the server can determine whether that 
+version number is still the current version of the timeline on the server.
+
+That version number is called an _ETag_ in HTTP land.
+
+Only if the ETag has changed the server will return new data along with a ```200 OK``` 
+status code. If not, the server will return a ```304 Not Modified``` status code without 
+data indicating the client is up to date. In both cases the server will also return the 
+current ETag.
+
+The client sends its current ETag to the server with the ```If-None-Match``` header.
+
+** Using the ETag in the client **
+
+What we'll change in our ```getTimeline``` function is that it will only update the 
+```timeline``` state if the server returns data. We determine that by looking at the 
+```200 OK``` status code.
+
+Also we need a way to store the current ETag version number on the client and send it 
+along when requesting the timeline. We do that by adding ```etag``` to state. If the server 
+responds with a different ETag we update the ````etag``` state.
+
+```js
+const [etag, setEtag] = useState(null);
+
+/* (...) */
+
+function getTimeline() {
+  axios
+    .get(settings.timelineUrl, {
+      headers: { "If-None-Match": etag },
+      validateStatus: function(status) {
+        return status < 400; // All status codes below 400 are valid
+      }
+    })
+    .then(res => {
+      if (etag !== res.headers.etag) {
+        setEtag(res.headers.etag);
+      }
+      if (res.status === 200) setTimeline(res.data);
+    })
+    .catch(error => {
+      console.log(error, error.request, error.response, error.config);
+    });  
+}
+```
+
+_Note: The ```validateStatus``` property is necessary to tell axios that besides 2xx 
+status codes also 3xx status codes are valid._
+
+** ... title ... **
+
+Although this looks nice, our friend _eslint_ has something to say. Or as Kent C. Dodds 
+would put it: "There's Dan Abramov looking over your shoulder telling you are using 
+hooks wrong...":
+
+> React Hook useEffect has a missing dependency: 'getTimeline'. Either include it or 
+remove the dependency array. (react-hooks/exhaustive-deps)
+
+Removing the dependency array is not an option because that would mean our effect is executed 
+on every render. We only want to execute it on mount. So let's add ```getTimeline``` to the 
+dependency array.
+
+_"But wait, why is this suddenly necessary?"_
+
+First of all, if Dan, I mean eslint tells you to, just do it.
+
+But there is also a good reason for it and that is because ```getTimeline``` is now using the 
+state variable ```etag``` and state variables can (and so probably will) change. The fact that 
+```getTimeline``` uses that variable in a closure means ```getTimeline``` itself also _changes_
+when ```etag``` changes.
+
+For our effects, ```getTimeline``` is a black box that will be called regularly and the effects 
+count on the fact that the current, up to date ```etag``` is used when doing so.
+
+So as soon as the etag is updated via setEtag, the component is re-rendered and the effects, 
+that have the dependency on getTimeline, are in sync again. They can safely call getTimeline and 
+know for sure that it is doing the API call with the current etag.
+
+> And that is what the dependencies array is about: keeping things in sync.
+
+Now you might say "yeah, nice, but it's too complicated, why don't you just let the effects 
+pass that etag to getTimeline?" That could be a solution but then we would also have to move 
+setting the etag coming from the response to state out of the function.
+
+I think in that case I would suggest to move getTimeline out of the component and just make 
+it completely stateless, to keep things clean and responsibilities clear. 
+
+And that would mean a big refactor, which is not a bad thing, but I like the (React) learning 
+effect on solving this problem within the component better.
+
+So our effects now look like this, with getTimeline added as dependency:
+
+```js
+useEffect(() => {
+  getTimeline();
+}, [getTimeline]);
+
+useEffect(() => {
+  const interval = setInterval(() => {
+    getTimeline();
+  }, 600000);
+  return () => clearInterval(interval);
+}, [getTimeline]);
+```
+
+** ... title ... **
+
+However, _eslint_ is still not satisfied. I get the following warning twice, for each effect:
+
+> The 'getTimeline' function makes the dependencies of useEffect Hook change on 
+every render. To fix this, wrap the 'getTimeline' definition into its own useCallback() Hook. 
+(react-hooks/exhaustive-deps)
+
+So we weren't completely there yet. We don't want that getTimeline changes on every render,
+because that means the effects (which depend on getTimeline) are also called on every render.
+
+Instead we want it only to change when ```etag``` changes. And we achieve that by wrapping the
+implementation for getTimeline in a useCallback hook and passing ```etag``` as the second argument:
+
+```js
+const getTimeline = useCallback(() => {
+  axios
+    .get(settings.timelineUrl, {
+      headers: { "If-None-Match": etag },
+      validateStatus: function(status) {
+        return status < 400; // All status codes below 400 are valid
+      }
+    })
+    .then(res => {
+      console.log(res.status);
+      if (etag !== res.headers.etag) {
+        setEtag(res.headers.etag);
+      }
+      if (res.status === 200) setTimeline(res.data);
+    })
+    .catch(error => {
+      console.log(error, error.request, error.response, error.config);
+    });
+}, [etag]);
+```
+
+_hier een kort verhaaltje wat het algemene doel van useCallback is... Ik vind de naam niet erg logisch nu..._
+
+** Conclusion **
+
+With adding both the getTimeline dependency and ```useCallback```, we now no longer only call 
+both effects on mount, we call them every time our _closured_ ```etag``` variable changes.
+
+Cool, we made both the client and server more efficient. Our React component is not 
+unnecesarily re-rendered every time and the server doesn't need to contact the database if 
+it sees the client is already up date. And we reduced the amount data that needs to be 
+transported over the network.
+
+And last but least, we accidentally learned about a new hook. :D
+
+_nog iets over of dit in de workshop kan..._
